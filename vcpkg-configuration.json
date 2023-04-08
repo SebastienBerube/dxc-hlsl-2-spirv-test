@@ -1,0 +1,9 @@
+{
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "https://github.com/SebastienBerube/vcpkg-registry",
+      "packages": [ "beicode" ]
+    }
+  ]
+}
