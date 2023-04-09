@@ -8,7 +8,7 @@
     {
       "kind": "git",
       "repository": "https://github.com/SebastienBerube/vcpkg-registry",
-      "baseline": "af11aa970709010a800ca97ba7e6bdfb73c6c941",
+      "baseline": "e9eebca5c5bc5cd1a942743ddb85c8043eadad11",
       "packages": [ "beicode", "dxc" ]
     }
   ]
