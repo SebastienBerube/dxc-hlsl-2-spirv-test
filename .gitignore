@@ -20,12 +20,14 @@
 *.out
 *.app
 
-# Ignore VS project files
+# Ignore VS project and build files
 *.sln
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
 .vs/
+dxc_test_main.dir/
+x64/
 
 # CMake
 CMakeCache.txt
