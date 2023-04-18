@@ -4,18 +4,20 @@ project(dxc-test)
 add_executable(dxc_test_main "main.cpp")
 target_compile_features(dxc_test_main PRIVATE cxx_std_14)
 
-message("Before find_library")
-# find_package(dxc CONFIG REQUIRED)
-# find_library()
+IF(UNIX AND NOT APPLE)
+	set(LINUX TRUE)
+ENDIF()
 
-find_library(dxc NAMES dxcompiler libdxcompiler dxcompiler vulkan PATHS ${CMAKE_SOURCE_DIR}/libs/dxc)
-message("Before target_link_libraries")
+IF(WIN32)
+	message("Using Win32 library")
+	find_library(dxc_lib_path NAMES dxcompiler PATHS ${CMAKE_SOURCE_DIR}/libs/dxc/x64)
+ELSEIF(LINUX)
+	message("Using Linux library")
+	find_library(dxc_lib_path NAMES libdxcompiler PATHS ${CMAKE_SOURCE_DIR}/libs/dxc/linux)
+ENDIF()
 
-# Add include directories to a target.
-# Specifies include directories to use when compiling a given target. The named <target> must have been created
-# target_include_directories(<target> [SYSTEM] [AFTER|BEFORE]
-#                            <INTERFACE|PUBLIC|PRIVATE> [items1...]
-#                            [<INTERFACE|PUBLIC|PRIVATE> [items2...] ...])
+message("find_library result : ${dxc_lib_path}")
+
 target_include_directories(dxc_test_main PRIVATE ${CMAKE_SOURCE_DIR}/external/dxc)
 
-target_link_libraries(dxc_test_main dxcompiler)
+target_link_libraries(dxc_test_main ${dxc_lib_path})
