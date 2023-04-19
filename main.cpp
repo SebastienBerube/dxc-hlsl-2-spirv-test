@@ -5,70 +5,55 @@
 #include <dxcapi.h>
 
 #include <cstdint>
-//#include <string_view>
 #include <vector>
 #include <locale>
 #include <codecvt>
 
-//For comPtr
+#include <fstream>
+
 #include <wrl/client.h>
 using namespace Microsoft::WRL;
 
-
-//Note : The reason for this is that a UTF-8 encoded string may contain multi-byte characters,
-//       and the null character ('\0') may appear as a part of a multi-byte sequence.
-//       Therefore, treating a UTF-8 encoded string as a null-terminated char* string may lead to incorrect
-//       results or even undefined behavior.
-//TODO : Test with data/UTF-8-Test1.txt
-//TODO : Fix it to work with UTF.
-//https://stackoverflow.com/questions/60640010/is-utf-8-which-represented-in-char-stdstring-enough-to-support-all-language
-//https://en.cppreference.com/w/cpp/locale/codecvt_utf8
-std::string utf8_to_string(const void* buffer, size_t size) {
-    return std::string(reinterpret_cast<const char*>(buffer), size);
-}
-
 std::string getCompilationErrors(ComPtr<IDxcResult>& result)
 {
-    std::string errorString;
+    std::string errors;
+    ComPtr<IDxcBlobWide> outputName = {};
+    ComPtr<IDxcBlobUtf8> dxcErrorInfo = {};
+    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&dxcErrorInfo), &outputName);
 
-    IDxcBlobEncoding* errorBlob = nullptr;
-    HRESULT hr = result->GetErrorBuffer(&errorBlob);
-
-    //TODO : Check hr
-    if (errorBlob == nullptr)
-    {
-        return errorString;
+    if (dxcErrorInfo != nullptr){
+        errors = std::string(dxcErrorInfo->GetStringPointer());
     }
-
-    void* errorBuffer = errorBlob->GetBufferPointer();
-    int bufSize = errorBlob->GetBufferSize();
-
-    //TODO : Check hr
-    if(errorBuffer == nullptr || bufSize == 0)
-    {
-        return errorString;
-    }
-
-    BOOL known;
-    UINT32 codePage;
-    hr = errorBlob->GetEncoding(&known, &codePage);
-
-    //TODO : Check hr and validate encoding.
-    return utf8_to_string(errorBuffer, bufSize);
+        
+    return std::move(errors);
 }
 
-int main(){
-    std::string hlsl_str = R"(
-        patate
-        [numthreads(8, 8, 8)] void main(uint3 global_i : SV_DispatchThreadID) {
-            // add code here
-        }
-    )";
+std::string loadTextFile(const std::string& filePath)
+{
+    std::ifstream file(filePath);
+    std::string content;
 
+    if (file.is_open()) {
+        // Read the entire file into a string
+        content.assign((std::istreambuf_iterator<char>(file)), (std::istreambuf_iterator<char>()));
+        file.close();
+
+        // Print the contents of the string
+        std::cout << content << std::endl;
+    }
+    else {
+        std::cout << "Failed to open file." << std::endl;
+    }
+
+    return std::move(content);
+}
+
+int main()
+{
+    std::string hlsl_str = loadTextFile("data/shaders/testUTF8.hlsl");
     ComPtr<IDxcUtils> dxc_utils = {};
     ComPtr<IDxcCompiler3> dxc_compiler = {};
-    DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(dxc_utils.ReleaseAndGetAddressOf()));
-    //DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxc_utils));
+    DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxc_utils));
     DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));
 
     DxcBuffer src_buffer;
@@ -87,7 +72,6 @@ int main(){
     args.push_back(L"-spirv");
     args.push_back(L"-fspv-target-env=vulkan1.1");
 
-
     HRESULT hr = 0;
 
     ComPtr<IDxcResult> result;
@@ -97,7 +81,7 @@ int main(){
 
     if (!errors.empty())
     {
-        std::cout << "Errors : \n" << errors << std::endl;
+        std::cout << "Errors : \n" << errors << std::endl; 
     }
     
 
@@ -105,7 +89,8 @@ int main(){
     hr = result->GetStatus(&status);
     
     ComPtr<IDxcBlob> shader_obj;
-    hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), nullptr);
+    ComPtr<IDxcBlobWide> outputName = {};
+    hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), &outputName);
 
     hr = result->GetStatus(&status);
 
@@ -125,5 +110,4 @@ int main(){
         }
     }
     std::cout << std::endl;
-    //std::cout<<"Hello, World!\n";
 }
