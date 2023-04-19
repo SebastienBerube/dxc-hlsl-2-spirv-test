@@ -25,7 +25,7 @@ std::string getCompilationErrors(ComPtr<IDxcResult>& result)
         errors = std::string(dxcErrorInfo->GetStringPointer());
     }
         
-    return std::move(errors);
+    return errors;
 }
 
 std::string loadTextFile(const std::string& filePath)
@@ -37,29 +37,78 @@ std::string loadTextFile(const std::string& filePath)
         // Read the entire file into a string
         content.assign((std::istreambuf_iterator<char>(file)), (std::istreambuf_iterator<char>()));
         file.close();
-
-        // Print the contents of the string
-        std::cout << content << std::endl;
     }
     else {
         std::cout << "Failed to open file." << std::endl;
     }
+    return content;
+}
 
-    return std::move(content);
+ComPtr<IDxcResult> compileHLSL(IDxcCompiler3* dxc_compiler, const std::string& hlslText, std::vector<LPCWSTR>& args)
+{
+    ComPtr<IDxcResult> result;
+
+    DxcBuffer src_buffer;
+    src_buffer.Ptr = &*hlslText.begin();
+    src_buffer.Size = hlslText.size();
+    src_buffer.Encoding = 0;
+
+    dxc_compiler->Compile(&src_buffer, args.data(), args.size(), nullptr, IID_PPV_ARGS(&result));
+
+    return result;
+}
+
+void printErrors(std::string& errors)
+{
+    if (!errors.empty())
+    {
+        std::cout << "Errors : \n" << errors << std::endl;
+    }
+}
+
+std::vector<std::uint32_t> getSpirvData(ComPtr<IDxcResult>& result)
+{
+    HRESULT hr = 0;
+    HRESULT status = 0;
+
+    //TODO : Why separate hr and status values?
+    hr = result->GetStatus(&status);
+
+    //TODO : Check hr
+    ComPtr<IDxcBlob> shader_obj;
+    ComPtr<IDxcBlobWide> outputName = {};
+    hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), &outputName);
+
+    std::vector<std::uint32_t> spirv_buffer(shader_obj->GetBufferSize() / sizeof(std::uint32_t));
+
+    //TODO : Use memcpy?
+    for (size_t i = 0; i < spirv_buffer.size(); ++i){
+        std::uint32_t spv_uint = static_cast<std::uint32_t*>(shader_obj->GetBufferPointer())[i];
+        spirv_buffer[i] = spv_uint;
+    }
+
+    return spirv_buffer;
+}
+
+
+void printBufferData(std::vector<std::uint32_t>& spirv_buffer)
+{
+    std::cout << "spv:\n";
+    for (size_t i = 0; i < spirv_buffer.size(); ++i){
+        std::cout << std::hex << (void*)(spirv_buffer[i]) << " ";
+        if (i % 8 == 7){
+            std::cout << std::endl;
+        }
+    }
+    std::cout << std::endl;
 }
 
 int main()
 {
-    std::string hlsl_str = loadTextFile("data/shaders/testUTF8.hlsl");
     ComPtr<IDxcUtils> dxc_utils = {};
     ComPtr<IDxcCompiler3> dxc_compiler = {};
     DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxc_utils));
-    DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));
-
-    DxcBuffer src_buffer;
-    src_buffer.Ptr = &*hlsl_str.begin();
-    src_buffer.Size = hlsl_str.size();
-    src_buffer.Encoding = 0;
+    DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));\
 
     std::vector<LPCWSTR> args;
     args.push_back(L"-Zpc");
@@ -72,42 +121,23 @@ int main()
     args.push_back(L"-spirv");
     args.push_back(L"-fspv-target-env=vulkan1.1");
 
-    HRESULT hr = 0;
 
-    ComPtr<IDxcResult> result;
-    dxc_compiler->Compile(&src_buffer, args.data(), args.size(), nullptr, IID_PPV_ARGS(&result));
-
-    std::string errors = getCompilationErrors(result);
-
-    if (!errors.empty())
+    //Shader Test 1
     {
-        std::cout << "Errors : \n" << errors << std::endl; 
+        ComPtr<IDxcResult> result = compileHLSL(*dxc_compiler.GetAddressOf(), loadTextFile("data/shaders/testCompilatonSuccess.hlsl"), args);
+        std::string errors = getCompilationErrors(result);
+        printErrors(errors);
+        std::vector<std::uint32_t> spirv_buffer = getSpirvData(result);
+        printBufferData(spirv_buffer);
     }
-    
 
-    HRESULT status;
-    hr = result->GetStatus(&status);
-    
-    ComPtr<IDxcBlob> shader_obj;
-    ComPtr<IDxcBlobWide> outputName = {};
-    hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), &outputName);
 
-    hr = result->GetStatus(&status);
-
-    std::vector<std::uint32_t> spirv_buffer;
-    spirv_buffer.resize(shader_obj->GetBufferSize() / sizeof(std::uint32_t));
-
-    std::cout << "spv:\n";
-
-    for (size_t i = 0; i < spirv_buffer.size(); ++i)
+    //Shader Test 2
     {
-        std::uint32_t spv_uint = static_cast<std::uint32_t*>(shader_obj->GetBufferPointer())[i];
-        spirv_buffer[i] = spv_uint;
-        std::cout << std::hex << (void*)spv_uint << " ";
-        if (i % 8 == 7)
-        {
-            std::cout << std::endl;
-        }
+        ComPtr<IDxcResult> result = compileHLSL(*dxc_compiler.GetAddressOf(), loadTextFile("data/shaders/testCompilatonError.hlsl"), args);
+        std::string errors = getCompilationErrors(result);
+        printErrors(errors);
+        std::vector<std::uint32_t> spirv_buffer = getSpirvData(result);
+        printBufferData(spirv_buffer);
     }
-    std::cout << std::endl;
 }
