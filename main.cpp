@@ -4,77 +4,130 @@
 #include <windows.h>
 #include <dxcapi.h>
 
-#include <cstdint>
-//#include <string_view>
 #include <vector>
-#include <locale>
-#include <codecvt>
 
-//For comPtr
+#include <fstream>
+
 #include <wrl/client.h>
 using namespace Microsoft::WRL;
 
-
-//Note : The reason for this is that a UTF-8 encoded string may contain multi-byte characters,
-//       and the null character ('\0') may appear as a part of a multi-byte sequence.
-//       Therefore, treating a UTF-8 encoded string as a null-terminated char* string may lead to incorrect
-//       results or even undefined behavior.
-//TODO : Test with data/UTF-8-Test1.txt
-//TODO : Fix it to work with UTF.
-//https://stackoverflow.com/questions/60640010/is-utf-8-which-represented-in-char-stdstring-enough-to-support-all-language
-//https://en.cppreference.com/w/cpp/locale/codecvt_utf8
-std::string utf8_to_string(const void* buffer, size_t size) {
-    return std::string(reinterpret_cast<const char*>(buffer), size);
-}
-
 std::string getCompilationErrors(ComPtr<IDxcResult>& result)
 {
-    std::string errorString;
+    std::string errors;
+    ComPtr<IDxcBlobWide> outputName = {};
+    ComPtr<IDxcBlobUtf8> dxcErrorInfo = {};
+    result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&dxcErrorInfo), &outputName);
 
-    IDxcBlobEncoding* errorBlob = nullptr;
-    HRESULT hr = result->GetErrorBuffer(&errorBlob);
-
-    //TODO : Check hr
-    if (errorBlob == nullptr)
-    {
-        return errorString;
+    if (dxcErrorInfo != nullptr){
+        errors = std::string(dxcErrorInfo->GetStringPointer());
     }
-
-    void* errorBuffer = errorBlob->GetBufferPointer();
-    int bufSize = errorBlob->GetBufferSize();
-
-    //TODO : Check hr
-    if(errorBuffer == nullptr || bufSize == 0)
-    {
-        return errorString;
-    }
-
-    BOOL known;
-    UINT32 codePage;
-    hr = errorBlob->GetEncoding(&known, &codePage);
-
-    //TODO : Check hr and validate encoding.
-    return utf8_to_string(errorBuffer, bufSize);
+        
+    return errors;
 }
 
-int main(){
-    std::string hlsl_str = R"(
-        patate
-        [numthreads(8, 8, 8)] void main(uint3 global_i : SV_DispatchThreadID) {
-            // add code here
-        }
-    )";
+std::string loadTextFile(const std::string& filePath)
+{
+    std::ifstream file(filePath);
+    std::string content;
 
-    ComPtr<IDxcUtils> dxc_utils = {};
-    ComPtr<IDxcCompiler3> dxc_compiler = {};
-    DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(dxc_utils.ReleaseAndGetAddressOf()));
-    //DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxc_utils));
-    DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));
+    if (file.is_open()) {
+        // Read the entire file into a string
+        content.assign((std::istreambuf_iterator<char>(file)), (std::istreambuf_iterator<char>()));
+        file.close();
+    }
+    else {
+        std::cout << "Failed to open file." << std::endl;
+    }
+    return content;
+}
+
+ComPtr<IDxcResult> compileHLSL(IDxcCompiler3* dxc_compiler, const std::string& hlslText, std::vector<LPCWSTR>& args)
+{
+    ComPtr<IDxcResult> result;
 
     DxcBuffer src_buffer;
-    src_buffer.Ptr = &*hlsl_str.begin();
-    src_buffer.Size = hlsl_str.size();
+    src_buffer.Ptr = &*hlslText.begin();
+    src_buffer.Size = hlslText.size();
     src_buffer.Encoding = 0;
+
+    dxc_compiler->Compile(&src_buffer, args.data(), args.size(), nullptr, IID_PPV_ARGS(&result));
+
+    return result;
+}
+
+void printErrors(std::string& errors)
+{
+    if (!errors.empty())
+    {
+        std::cout << "Errors : \n" << errors << std::endl;
+    }
+}
+
+std::vector<std::uint32_t> getSpirvData(ComPtr<IDxcResult>& result)
+{
+    HRESULT status = 0;
+    HRESULT hr = result->GetStatus(&status);
+    if (FAILED(hr) || FAILED(status))
+    {
+        throw std::runtime_error("IDxcResult::GetStatus failed with HRESULT = " + status);
+    }
+
+    ComPtr<IDxcBlob> shader_obj;
+    ComPtr<IDxcBlobWide> outputName = {};
+    hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), &outputName);
+    if (FAILED(hr) || FAILED(status))
+    {
+        throw std::runtime_error("IDxcResult::GetStatus failed with HRESULT = " + status);
+    }
+
+    const auto shader_size = shader_obj->GetBufferSize();
+    if (shader_size % sizeof(std::uint32_t) != 0)
+    {
+        throw std::runtime_error("Invalid SPIR-V buffer size");
+    }
+
+    const auto num_words = shader_size / sizeof(std::uint32_t);
+    std::vector<std::uint32_t> spirv_buffer(num_words);
+
+    memcpy(spirv_buffer.data(), shader_obj->GetBufferPointer(), shader_obj->GetBufferSize());
+
+    return spirv_buffer;
+}
+
+
+void printBufferData(std::vector<std::uint32_t>& spirv_buffer)
+{
+    std::cout << "spv:\n";
+    for (size_t i = 0; i < spirv_buffer.size(); ++i){
+        std::cout << std::hex << (void*)(spirv_buffer[i]) << " ";
+        if (i % 8 == 7){
+            std::cout << std::endl;
+        }
+    }
+    std::cout << std::endl;
+}
+
+void testShaderCompilation(ComPtr<IDxcCompiler3>& dxc_compiler, const std::string& filePath, std::vector<LPCWSTR>& args)
+{
+    ComPtr<IDxcResult> result = compileHLSL(*dxc_compiler.GetAddressOf(), loadTextFile(filePath), args);
+    std::string errors = getCompilationErrors(result);
+    if (!errors.empty())
+    {
+        printErrors(errors);
+    }
+    else
+    {
+        std::vector<std::uint32_t> spirv_buffer = getSpirvData(result);
+        printBufferData(spirv_buffer);
+    }
+}
+
+int main()
+{
+    ComPtr<IDxcUtils> dxc_utils = {};
+    ComPtr<IDxcCompiler3> dxc_compiler = {};
+    DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxc_utils));
+    DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxc_compiler));\
 
     std::vector<LPCWSTR> args;
     args.push_back(L"-Zpc");
@@ -88,42 +141,9 @@ int main(){
     args.push_back(L"-fspv-target-env=vulkan1.1");
 
 
-    HRESULT hr = 0;
-
-    ComPtr<IDxcResult> result;
-    dxc_compiler->Compile(&src_buffer, args.data(), args.size(), nullptr, IID_PPV_ARGS(&result));
-
-    std::string errors = getCompilationErrors(result);
-
-    if (!errors.empty())
-    {
-        std::cout << "Errors : \n" << errors << std::endl;
-    }
-    
-
-    HRESULT status;
-    hr = result->GetStatus(&status);
-    
-    ComPtr<IDxcBlob> shader_obj;
-    hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), nullptr);
-
-    hr = result->GetStatus(&status);
-
-    std::vector<std::uint32_t> spirv_buffer;
-    spirv_buffer.resize(shader_obj->GetBufferSize() / sizeof(std::uint32_t));
-
-    std::cout << "spv:\n";
-
-    for (size_t i = 0; i < spirv_buffer.size(); ++i)
-    {
-        std::uint32_t spv_uint = static_cast<std::uint32_t*>(shader_obj->GetBufferPointer())[i];
-        spirv_buffer[i] = spv_uint;
-        std::cout << std::hex << (void*)spv_uint << " ";
-        if (i % 8 == 7)
-        {
-            std::cout << std::endl;
-        }
-    }
-    std::cout << std::endl;
-    //std::cout<<"Hello, World!\n";
+    std::cout << "Test 1 : This one should compile\n\n";
+    testShaderCompilation(dxc_compiler, "data/shaders/testCompilatonSuccess.hlsl", args);
+    std::cout << "\n------------------------------\n\n";
+    std::cout << "Test 2 : This one should print errors\n\n";
+    testShaderCompilation(dxc_compiler, "data/shaders/testCompilatonError.hlsl", args);
 }
