@@ -4,10 +4,7 @@
 #include <windows.h>
 #include <dxcapi.h>
 
-#include <cstdint>
 #include <vector>
-#include <locale>
-#include <codecvt>
 
 #include <fstream>
 
@@ -68,24 +65,31 @@ void printErrors(std::string& errors)
 
 std::vector<std::uint32_t> getSpirvData(ComPtr<IDxcResult>& result)
 {
-    HRESULT hr = 0;
     HRESULT status = 0;
+    HRESULT hr = result->GetStatus(&status);
+    if (FAILED(hr) || FAILED(status))
+    {
+        throw std::runtime_error("IDxcResult::GetStatus failed with HRESULT = " + status);
+    }
 
-    //TODO : Why separate hr and status values?
-    hr = result->GetStatus(&status);
-
-    //TODO : Check hr
     ComPtr<IDxcBlob> shader_obj;
     ComPtr<IDxcBlobWide> outputName = {};
     hr = result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&shader_obj), &outputName);
-
-    std::vector<std::uint32_t> spirv_buffer(shader_obj->GetBufferSize() / sizeof(std::uint32_t));
-
-    //TODO : Use memcpy?
-    for (size_t i = 0; i < spirv_buffer.size(); ++i){
-        std::uint32_t spv_uint = static_cast<std::uint32_t*>(shader_obj->GetBufferPointer())[i];
-        spirv_buffer[i] = spv_uint;
+    if (FAILED(hr) || FAILED(status))
+    {
+        throw std::runtime_error("IDxcResult::GetStatus failed with HRESULT = " + status);
     }
+
+    const auto shader_size = shader_obj->GetBufferSize();
+    if (shader_size % sizeof(std::uint32_t) != 0)
+    {
+        throw std::runtime_error("Invalid SPIR-V buffer size");
+    }
+
+    const auto num_words = shader_size / sizeof(std::uint32_t);
+    std::vector<std::uint32_t> spirv_buffer(num_words);
+
+    memcpy(spirv_buffer.data(), shader_obj->GetBufferPointer(), shader_obj->GetBufferSize());
 
     return spirv_buffer;
 }
@@ -101,6 +105,21 @@ void printBufferData(std::vector<std::uint32_t>& spirv_buffer)
         }
     }
     std::cout << std::endl;
+}
+
+void testShaderCompilation(ComPtr<IDxcCompiler3>& dxc_compiler, const std::string& filePath, std::vector<LPCWSTR>& args)
+{
+    ComPtr<IDxcResult> result = compileHLSL(*dxc_compiler.GetAddressOf(), loadTextFile(filePath), args);
+    std::string errors = getCompilationErrors(result);
+    if (!errors.empty())
+    {
+        printErrors(errors);
+    }
+    else
+    {
+        std::vector<std::uint32_t> spirv_buffer = getSpirvData(result);
+        printBufferData(spirv_buffer);
+    }
 }
 
 int main()
@@ -122,22 +141,9 @@ int main()
     args.push_back(L"-fspv-target-env=vulkan1.1");
 
 
-    //Shader Test 1
-    {
-        ComPtr<IDxcResult> result = compileHLSL(*dxc_compiler.GetAddressOf(), loadTextFile("data/shaders/testCompilatonSuccess.hlsl"), args);
-        std::string errors = getCompilationErrors(result);
-        printErrors(errors);
-        std::vector<std::uint32_t> spirv_buffer = getSpirvData(result);
-        printBufferData(spirv_buffer);
-    }
-
-
-    //Shader Test 2
-    {
-        ComPtr<IDxcResult> result = compileHLSL(*dxc_compiler.GetAddressOf(), loadTextFile("data/shaders/testCompilatonError.hlsl"), args);
-        std::string errors = getCompilationErrors(result);
-        printErrors(errors);
-        std::vector<std::uint32_t> spirv_buffer = getSpirvData(result);
-        printBufferData(spirv_buffer);
-    }
+    std::cout << "Test 1 : This one should compile\n\n";
+    testShaderCompilation(dxc_compiler, "data/shaders/testCompilatonSuccess.hlsl", args);
+    std::cout << "\n------------------------------\n\n";
+    std::cout << "Test 2 : This one should print errors\n\n";
+    testShaderCompilation(dxc_compiler, "data/shaders/testCompilatonError.hlsl", args);
 }
